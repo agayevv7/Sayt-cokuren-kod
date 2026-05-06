@@ -1,1 +1,1 @@
-# Heç nə tələb olunmur - tamamilə zero dependency
+aiohttp>=3.9.0
