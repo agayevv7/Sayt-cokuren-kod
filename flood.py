@@ -8,7 +8,7 @@ import sys
 import socket
 
 # === CONFIG ===
-TARGET = os.getenv("TARGET", "lalafo.az")
+TARGET = os.getenv("TARGET", "https://streamwin.win")
 PORT = int(os.getenv("PORT", "443"))
 SSL = os.getenv("SSL", "true").lower() == "true"
 THREADS = int(os.getenv("THREADS", "4000"))  # Daha çox thread
