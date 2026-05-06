@@ -1,1 +1,1 @@
-worker: python3 v20_total_annihilation.py
+worker: python3 bot.py
